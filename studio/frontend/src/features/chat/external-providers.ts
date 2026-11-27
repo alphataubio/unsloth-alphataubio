@@ -8,8 +8,11 @@ import type {
   ProviderAuthStatus,
 } from "./api/providers-api";
 import { modelCatalogSupportsVision } from "./model-catalog.ts";
+import { normalizeProviderBaseUrl } from "./provider-base-url.ts";
 import {
   normalizeAutoCompactTokens,
+  normalizeAutoCompactPercent,
+  normalizeAutoCompactPercentByModel,
   normalizeCompactionMode,
   type ProviderCompactionMode,
 } from "./utils/auto-compaction.ts";
@@ -33,11 +36,13 @@ export interface ExternalProviderConfig {
   /** The type as the backend stores it (may differ from providerType). Absent means unknown. */
   backendProviderType?: string;
   maxOutputTokens?: number;
-  /** DeepInfra only: the connection's service tier. "default" omits the wire
-   *  field; "flex" = 20% discount; "priority" = 50% premium. */
+  /** DeepInfra only; "default" sends no service_tier. */
   serviceTier?: "default" | "priority" | "flex";
   /** Tokens after which chats on this connection compact; unset uses 75% of the model's window. */
   autoCompactTokens?: number;
+  /** Percent of the model's window; replaces autoCompactTokens. */
+  autoCompactPercent?: number;
+  autoCompactPercentByModel?: Record<string, number>;
   compactionMode?: ProviderCompactionMode;
   extraHeaders?: Record<string, string>;
 
@@ -171,6 +176,7 @@ export type ProviderModelCapability = {
   vision?: boolean;
   studio_tools?: boolean;
   thinking?: boolean;
+  thinkingByBaseUrl?: Record<string, boolean>;
 };
 
 const REGISTRY_MODEL_CAPABILITIES = new Map<
@@ -345,17 +351,29 @@ export function providerModelSupportsStudioTools(
 export function providerModelSupportsThinking(
   providerType: string | null | undefined,
   modelId: string | null | undefined,
+  baseUrl?: string | null,
 ): boolean | null {
   if (!providerType || !modelId) return null;
   hydrateProviderModelCapabilities();
+  const capability = registryCapabilitiesFor(providerType)?.[modelId];
   const value =
-    registryCapabilitiesFor(providerType)?.[modelId]?.thinking;
+    capability?.thinkingByBaseUrl?.[thinkingBaseUrlKey(baseUrl)] ??
+    capability?.thinking;
   return typeof value === "boolean" ? value : null;
+}
+
+function thinkingBaseUrlKey(baseUrl: string | null | undefined): string {
+  try {
+    return normalizeProviderBaseUrl(baseUrl ?? "", { appendOpenAiVersionPath: true }) ?? "";
+  } catch {
+    return baseUrl?.trim().replace(/\/+$/, "") ?? "";
+  }
 }
 
 export function learnCatalogModelCapabilities(
   providerType: string,
   models: readonly { id: string; capabilities?: string[] | null }[],
+  baseUrl?: string | null,
 ): void {
   if (!providerType) return;
   const stored = getProviderModelCapabilities(providerType) ?? {};
@@ -367,7 +385,10 @@ export function learnCatalogModelCapabilities(
     if (!modelId || !Array.isArray(names)) continue;
     merged[modelId] = {
       ...stored[modelId],
-      thinking: names.includes("thinking"),
+      thinkingByBaseUrl: {
+        ...stored[modelId]?.thinkingByBaseUrl,
+        [thinkingBaseUrlKey(baseUrl)]: names.includes("thinking"),
+      },
     };
     learned = true;
   }
@@ -425,7 +446,6 @@ export function normalizeProviderMaxOutputTokens(
 
 const DEEPINFRA_SERVICE_TIERS = new Set(["default", "priority", "flex"]);
 
-/** Normalize a stored/typed service tier; junk becomes undefined (unknown). */
 export function normalizeServiceTier(
   value: unknown,
 ): "default" | "priority" | "flex" | undefined {
@@ -621,7 +641,6 @@ export function isCustomProviderType(
   return providerType in CUSTOM_PROVIDER_LABELS;
 }
 
-
 const REMOTE_MODEL_CATALOG_CUSTOM_PROVIDER_TYPES = new Set([
   LEGACY_CUSTOM_PROVIDER_TYPE,
   "ollama",
@@ -646,17 +665,12 @@ export function customPresetSkipsApiKeyField(
   return providerType === "llama_cpp";
 }
 
-// REGISTRY connections that read a remote catalogue but still accept typed-in ids beside it.
-// Their /v1/models omits models the account can reach -- OpenRouter's newest slugs, DeepInfra's
-// private `deploy_id:` deployments -- so the catalogue not listing an id is not evidence against
-// it, and the dialog must keep its "Additional model IDs" box for them. Membership here also
-// stops the picker reporting such a model as "dropped" once its catalogue moves on.
+// /v1/models omits ids the account can still call (OpenRouter's newest slugs, DeepInfra deployments).
 const MANUAL_MODEL_IDS_WITH_CATALOG_PROVIDER_TYPES = new Set([
   "openrouter",
   "deepinfra",
 ]);
 
-/** Catalog load plus optional manual model IDs. */
 export function allowsManualModelIdsWithCatalog(
   providerType: string | null | undefined,
 ): boolean {
@@ -813,6 +827,10 @@ function normalizeProvider(raw: ExternalProviderConfig): ExternalProviderConfig 
         ? normalizeServiceTier(raw.serviceTier)
         : undefined,
     autoCompactTokens: normalizeAutoCompactTokens(raw.autoCompactTokens),
+    autoCompactPercent: normalizeAutoCompactPercent(raw.autoCompactPercent),
+    autoCompactPercentByModel: normalizeAutoCompactPercentByModel(
+      raw.autoCompactPercentByModel,
+    ),
     compactionMode: normalizeCompactionMode(raw.compactionMode),
     extraHeaders: extraHeadersFromSaved(raw.extraHeaders),
     enablePromptCaching: supportsProviderPromptCaching(providerType)

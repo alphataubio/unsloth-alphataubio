@@ -389,6 +389,11 @@ export interface InferenceStatusResponse {
   /** e.g. {"clone": "clon"}; a task other than audio_server_task reloads. */
   audio_workflow_tasks?: Record<string, string> | null;
   audio_server_task?: string | null;
+  /** Separate: what the model is for, and the id of its one output when it filters a recording. */
+  audio_separation?: {
+    goal: "stems" | "speakers" | "voice" | "restore";
+    output: string | null;
+  } | null;
   audio_convert_route?: string | null;
   audio_convert?: AudioConvertCaps | null;
   audio_required_inputs?: string[] | null;
@@ -408,6 +413,7 @@ export interface InferenceStatusResponse {
   loaded: string[];
   serving?: string[];
   serving_checkpoints?: string[];
+  serving_quants?: (string | null)[];
   resident_mib?: number | null;
   resident_on_gpu?: boolean | null;
   /** Keep multiple models loaded, as saved on the server. Absent from older servers. */
@@ -741,8 +747,7 @@ export interface OpenAIChatCompletionsRequest {
   anthropic_code_exec_container_id?: string | null;
   /** Opus 4.6 / 4.7 only; dropped silently elsewhere. */
   fast_mode?: boolean | null;
-  /** DeepInfra service tier: "flex" = 20% discount (best-effort scheduling),
-   *  "priority" = 50% premium. Omitted = standard. */
+  /** DeepInfra only. */
   service_tier?: "default" | "priority" | "flex";
   /** The backend only emits the usage chunk when include_usage is set. */
   stream_options?: { include_usage?: boolean } | null;
